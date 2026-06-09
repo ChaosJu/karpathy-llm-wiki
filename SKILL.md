@@ -17,13 +17,28 @@ Three layers, all under the user's project root:
 
 **raw/** — Immutable source material. You read, never modify. Organized by topic subdirectories (e.g., `raw/machine-learning/`).
 
-**wiki/** — Compiled knowledge articles. You have full ownership. Organized by topic subdirectories, one level only: `wiki/<topic>/<article>.md`. Contains two special files:
+**wiki/** — Compiled knowledge articles. You have full ownership. Organized by topic subdirectories, one level only: `wiki/<topic>/<article>.md`. Contains special files:
 - `wiki/index.md` — Global index. One row per article, grouped by topic, with link + summary + Updated date.
 - `wiki/log.md` — Append-only operation log.
+- `wiki/hot.md` — Session context cache (~500 words). Updated at session end.
+- `wiki/purpose.md` — Knowledge base goals and scope. Read at session start.
 
 **SKILL.md** (this file) — Schema layer. Defines structure and workflow rules.
 
-Templates live in `references/` relative to this file. Read them when you need the exact format for raw files, articles, archive pages, or the index.
+Templates live in `references/` relative to this file. Read them when you need the exact format for raw files, articles, archive pages, purpose, or the index.
+
+### Token Budget Strategy
+
+Load knowledge progressively to minimize cost:
+
+| Level | What to read | When |
+|-------|--------------|------|
+| L0 | SKILL.md frontmatter (~50 tokens) | Always (auto-loaded) |
+| L1 | `wiki/purpose.md` + `wiki/hot.md` + `wiki/index.md` | Session start, before any operation |
+| L2 | Article Overview sections only | When scanning for relevance |
+| L3 | Full article bodies | Only for articles confirmed relevant |
+
+Never read all articles at once. Follow L0 → L1 → L2 → L3 progression.
 
 ### Initialization
 
@@ -33,6 +48,8 @@ Triggers only on the first Ingest. Check whether `raw/` and `wiki/` exist. Creat
 - `wiki/` directory (with `.gitkeep`)
 - `wiki/index.md` — heading `# Knowledge Base Index`, empty body
 - `wiki/log.md` — heading `# Wiki Log`, empty body
+- `wiki/hot.md` — heading `# Hot Context`, body: `No prior session context.`
+- `wiki/purpose.md` — initialized from `references/purpose-templates.md` (ask user which scenario: general, research, reading, or project)
 
 If Query or Lint cannot find the wiki structure, tell the user: "Run an ingest first to initialize the wiki." Do not auto-create.
 
@@ -46,13 +63,15 @@ Fetch a source into raw/, then compile it into wiki/. Always both steps, no exce
 
 1. Get the source content using whatever web or file tools your environment provides. If nothing can reach the source, ask the user to paste it directly.
 
-2. Pick a topic directory. Check existing `raw/` subdirectories first; reuse one if the topic is close enough. Create a new subdirectory only for genuinely distinct topics.
+2. **Deduplication** — Compute SHA256 of the source body (excluding metadata header). Check existing raw/ files' `Content-Hash` fields. If an identical hash exists, skip and tell the user which file already contains this content.
 
-3. Save as `raw/<topic>/YYYY-MM-DD-descriptive-slug.md`.
+3. Pick a topic directory. Check existing `raw/` subdirectories first; reuse one if the topic is close enough. Create a new subdirectory only for genuinely distinct topics.
+
+4. Save as `raw/<topic>/YYYY-MM-DD-descriptive-slug.md`.
    - Slug from source title, kebab-case, max 60 characters.
    - Published date unknown → omit the date prefix from the file name (e.g., `descriptive-slug.md`). The metadata Published field still appears; set it to `Unknown`.
    - If a file with the same name already exists, append a numeric suffix (e.g., `descriptive-slug-2.md`).
-   - Include metadata header: source URL, collected date, published date.
+   - Include metadata header: source URL, collected date, published date, content hash.
    - Preserve original text. Clean formatting noise. Do not rewrite opinions.
 
    See `references/raw-template.md` for the exact format.
@@ -65,7 +84,19 @@ Determine where the new content belongs:
 - **New concept** → Create a new article in the most relevant topic directory. Name the file after the concept, not the raw file.
 - **Spans multiple topics** → Place in the most relevant directory. Add See Also cross-references to related articles elsewhere.
 
-These are not mutually exclusive. A single source may warrant merging into one article while also creating a separate article for a distinct concept it introduces. In all cases, check for factual conflicts: if the new source contradicts existing content, annotate the disagreement with source attribution. When merging, note the conflict within the merged article. When the conflicting content lives in separate articles, note it in both and cross-link them.
+These are not mutually exclusive. A single source may warrant merging into one article while also creating a separate article for a distinct concept it introduces.
+
+**Entity hints** — When creating a new article, choose the structural style that fits the content:
+- *Concept* (default): theories, algorithms, abstract ideas → Overview + Mechanism + Implications
+- *Person/Org*: people, teams, companies → Overview + Background + Key Contributions + Positions
+- *Tool*: software, frameworks, products → Overview + Architecture + Usage + Tradeoffs
+- *Event*: launches, breakthroughs, incidents → Overview + Context + Impact + Timeline
+
+These are guidelines for section structure, not rigid schemas. Adapt freely.
+
+**Conflict handling** — Check for factual conflicts: if the new source contradicts existing content, annotate the disagreement with source attribution. When merging, note the conflict within the merged article. When the conflicting content lives in separate articles, note it in both and cross-link them.
+
+**Counter-arguments** — When an article accumulates 3+ sources on the same claim, add a `## Counter-Arguments` section: opposing viewpoints, data gaps, and confidence assessment. This prevents bias accumulation.
 
 See `references/article-template.md` for article format. Key points:
 - Sources field: author, organization, or publication name + date, semicolon-separated.
@@ -90,6 +121,7 @@ Append to `wiki/log.md`:
 
 ```
 ## [YYYY-MM-DD] ingest | <primary article title>
+- Source: <raw file path>
 - Updated: <cascade-updated article title>
 - Updated: <another cascade-updated article title>
 ```
@@ -107,10 +139,13 @@ Search the wiki and answer questions. Examples of triggers:
 
 ### Steps
 
-1. Read `wiki/index.md` to locate relevant articles.
-2. Read those articles and synthesize an answer.
-3. Prefer wiki content over your own training knowledge. Cite sources with markdown links: `[Article Title](wiki/topic/article.md)` (project-root-relative paths for in-conversation citations; within wiki/ files, use paths relative to the current file).
-4. Output the answer in the conversation. Do not write files unless asked.
+1. Read `wiki/purpose.md` and `wiki/hot.md` for context (L1).
+2. Read `wiki/index.md` to locate relevant articles (L1).
+3. Scan Overview sections of candidate articles (L2). Narrow to truly relevant ones.
+4. Read full articles only for confirmed matches (L3). Follow one level of See Also links if needed.
+5. Synthesize an answer. Prefer wiki content over your own training knowledge. Cite sources with markdown links: `[Article Title](wiki/topic/article.md)` (project-root-relative paths for in-conversation citations; within wiki/ files, use paths relative to the current file).
+6. Output the answer in the conversation. Do not write files unless asked.
+7. **Gap detection** — If the wiki lacks coverage for a clearly answerable question, note: "Knowledge gap: no wiki article about X. Consider ingesting a source on this topic."
 
 ### Archiving
 
@@ -138,7 +173,7 @@ Quality checks on the wiki. Two categories with different authority levels.
 
 Fix these automatically:
 
-**Index consistency** — compare `wiki/index.md` against actual wiki/ files (excluding index.md and log.md):
+**Index consistency** — compare `wiki/index.md` against actual wiki/ files (excluding index.md, log.md, hot.md, and purpose.md):
 - File exists but missing from index → add entry with `(no summary)` placeholder. For Updated, use the article's metadata Updated date if present; otherwise fall back to file's last modified date.
 - Index entry points to nonexistent file → mark as `[MISSING]` in the index. Do not delete the entry; let the user decide.
 
@@ -167,6 +202,8 @@ These rely on your judgment. Report findings without auto-fixing:
 - Missing cross-topic references
 - Concepts frequently mentioned but lacking a dedicated page
 - Archive pages whose cited source articles have been substantially updated since archival
+- Articles with 3+ sources but no Counter-Arguments section
+- Knowledge gaps: topics referenced in purpose.md but absent from wiki
 
 ### Post-Lint
 
@@ -178,6 +215,24 @@ Append to `wiki/log.md`:
 
 ---
 
+## Hot Cache
+
+`wiki/hot.md` is a lightweight session-continuity mechanism (~500 words max).
+
+**When to update:** At the end of a productive session (user says goodbye, or after a complex multi-ingest/query sequence).
+
+**What to write:** Overwrite (not append) with:
+- Current focus areas (what topics the user is actively exploring)
+- Recent decisions or open questions
+- Unfinished work (e.g., "3 sources ingested about X, but comparison article not yet written")
+- Any contradictions or gaps flagged but not yet resolved
+
+**When to read:** Silently at session start (L1). Use it to offer continuity: "Last session you were exploring X and had an open question about Y."
+
+Do not bloat hot.md. If it exceeds 500 words, summarize ruthlessly.
+
+---
+
 ## Conventions
 
 - Standard markdown with relative links throughout.
@@ -185,3 +240,4 @@ Append to `wiki/log.md`:
 - Today's date for log entries, Collected dates, and Archived dates. Updated dates reflect when the article's knowledge content last changed. Published dates come from the source (use `Unknown` when unavailable).
 - Inside wiki/ files, all markdown links use paths relative to the current file. In conversation output, use project-root-relative paths (e.g., `wiki/topic/article.md`).
 - Ingest updates both `wiki/index.md` and `wiki/log.md`. Archive (from Query) updates both. Lint updates `wiki/log.md` (and `wiki/index.md` only when auto-fixing index entries). Plain queries do not write any files.
+- SHA256 content hashes in raw/ files enable incremental processing. Never re-compile a source whose hash matches an already-compiled raw file unless the user explicitly requests it.

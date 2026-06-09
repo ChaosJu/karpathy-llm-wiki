@@ -3,10 +3,10 @@
 **A reusable skill for building Karpathy-style LLM wikis with Claude Code, Cursor, Codex, and other Agent Skills tools.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Astro-Han/karpathy-llm-wiki?style=social)](https://github.com/Astro-Han/karpathy-llm-wiki)
-[![GitHub forks](https://img.shields.io/github/forks/Astro-Han/karpathy-llm-wiki?style=social)](https://github.com/Astro-Han/karpathy-llm-wiki)
+[![GitHub stars](https://img.shields.io/github/stars/ChaosJu/karpathy-llm-wiki?style=social)](https://github.com/ChaosJu/karpathy-llm-wiki)
+[![GitHub forks](https://img.shields.io/github/forks/ChaosJu/karpathy-llm-wiki?style=social)](https://github.com/ChaosJu/karpathy-llm-wiki)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-blue)](https://agentskills.io)
-[![Install](https://img.shields.io/badge/Install-npx_add--skill-green)](https://github.com/Astro-Han/karpathy-llm-wiki#install)
+[![Install](https://img.shields.io/badge/Install-npx_add--skill-green)](https://github.com/ChaosJu/karpathy-llm-wiki#install)
 
 <p align="center">
   <img src="assets/karpathy-tweet.png" alt="Karpathy's tweet about LLM Wiki" width="560">
@@ -28,6 +28,18 @@ This skill gives you three operations:
 
 See [SKILL.md](SKILL.md) for the full skill specification.
 
+## What's New in v2
+
+| Feature | Description |
+|---------|-------------|
+| **Token Budget (L0–L3)** | Progressive loading strategy — agent reads index first, full articles only when confirmed relevant |
+| **SHA256 Deduplication** | Content hashing prevents re-ingesting or re-compiling unchanged sources |
+| **Hot Cache** | `wiki/hot.md` carries session context (~500 words) across conversations, replacing expensive recaps |
+| **Purpose & Scenarios** | `wiki/purpose.md` anchors the knowledge base direction; 4 scenario templates (general, research, reading, project) |
+| **Entity Hints** | Lightweight structural guidance (concept/person/tool/event) without rigid schemas |
+| **Counter-Arguments** | Articles with 3+ sources automatically gain opposing viewpoints, preventing bias accumulation |
+| **Gap Detection** | Query operation flags missing coverage areas; Lint checks purpose.md topics against actual wiki |
+
 ## LLM Wiki vs RAG
 
 | Approach | Knowledge lives in | When synthesis happens | Good for |
@@ -37,45 +49,48 @@ See [SKILL.md](SKILL.md) for the full skill specification.
 
 This skill is optimized for the wiki model: knowledge that improves over time instead of re-deriving relationships on every query.
 
-## Usage Stats
-
-Based on a production knowledge base maintained daily since April 2026:
-
-- **94** wiki articles across **13** topic directories
-- **99** source materials ingested
-- **87** operation log entries in the last 7 days
+## Examples
 
 See [examples/](examples/) for sample wiki pages, source files, and operation logs.
 
 ## Install
 
 ```bash
-npx add-skill Astro-Han/karpathy-llm-wiki
+npx add-skill ChaosJu/karpathy-llm-wiki
 ```
 
 Works with any tool that supports the [Agent Skills](https://agentskills.io) standard.
 
 ## Quick Start
 
-### 1. Ingest your first source
+### 1. Initialize with a purpose
+
+On your first ingest, the skill asks which scenario fits your use case:
+
+- **General** — open-ended knowledge building
+- **Research** — academic paper tracking and methodology mapping
+- **Reading** — book-based knowledge synthesis
+- **Project** — software architecture decisions and team knowledge
+
+### 2. Ingest your first source
 
 Give the skill a URL, a file, or pasted text:
 
 > "Ingest this article: https://example.com/attention-is-all-you-need"
 
-The skill stores the source in `raw/`, then compiles or updates the right knowledge pages in `wiki/`.
+The skill stores the source in `raw/` (with SHA256 hash for dedup), then compiles or updates the right knowledge pages in `wiki/`.
 
-### 2. Ask your wiki a question
+### 3. Ask your wiki a question
 
 > "What do I know about attention mechanisms?"
 
-The skill searches the wiki and answers with citations linking back to your markdown pages.
+The skill follows L0→L3 token budget: reads index first, scans overviews, then loads only relevant full articles before answering with citations.
 
-### 3. Keep the wiki healthy
+### 4. Keep the wiki healthy
 
 > "Lint my wiki"
 
-Checks for broken links, missing index entries, stale cross-references, and related issues.
+Checks for broken links, missing index entries, stale cross-references, orphan pages, missing counter-arguments, and knowledge gaps relative to your purpose.
 
 ## How the Workflow Works
 
@@ -83,17 +98,32 @@ The core idea from Karpathy: the LLM maintains the wiki while the human focuses 
 
 ```text
 your-project/
-├── raw/            ← Immutable source material
+├── raw/            ← Immutable source material (with content hashes)
 │   └── topic/
 │       └── 2026-04-03-source-article.md
 ├── wiki/           ← Compiled knowledge pages maintained by the LLM
 │   ├── topic/
 │   │   └── concept-name.md
 │   ├── index.md    ← Global table of contents
-│   └── log.md      ← Append-only operation log
+│   ├── log.md      ← Append-only operation log
+│   ├── hot.md      ← Session context cache (~500 words)
+│   └── purpose.md  ← Knowledge base goals and scope
 ```
 
-Each new source can update multiple pages, strengthen cross-references, and record contradictions. That is what makes the wiki compound over time.
+Each new source can update multiple pages, strengthen cross-references, trigger counter-arguments, and record contradictions. That is what makes the wiki compound over time.
+
+## Token Budget Strategy
+
+The skill minimizes LLM costs with progressive loading:
+
+```
+L0: SKILL.md frontmatter        (~50 tokens, auto-loaded)
+L1: purpose + hot + index       (~1-2K tokens, session start)
+L2: Article Overview sections   (scan for relevance)
+L3: Full article bodies         (only confirmed-relevant articles)
+```
+
+This means a query touching 3 articles out of a large wiki reads ~3K tokens instead of loading everything.
 
 ## Tool Compatibility
 
@@ -101,31 +131,41 @@ This skill follows the [agentskills.io](https://agentskills.io) open standard:
 
 | Tool | Install method |
 |------|----------------|
-| Claude Code | `npx add-skill Astro-Han/karpathy-llm-wiki` |
-| Cursor | `npx add-skill Astro-Han/karpathy-llm-wiki` |
+| Claude Code | `npx add-skill ChaosJu/karpathy-llm-wiki` |
+| Cursor | `npx add-skill ChaosJu/karpathy-llm-wiki` |
 | Codex CLI | Copy to `.agents/skills/karpathy-llm-wiki/` |
-| OpenCode | `npx add-skill Astro-Han/karpathy-llm-wiki` |
+| OpenCode | `npx add-skill ChaosJu/karpathy-llm-wiki` |
 | Other tools | Copy `SKILL.md` and `references/` into the tool's skill directory |
 
 ## FAQ
 
 ### What is the difference between an LLM wiki and a personal wiki?
 
-An LLM wiki is maintained by the model. It updates summaries, cross-links, index entries, and contradictions as new material arrives. A normal personal wiki depends on manual editing.
+An LLM wiki is maintained by the model. It updates summaries, cross-links, index entries, counter-arguments, and contradictions as new material arrives. A normal personal wiki depends on manual editing.
 
 ### What sources can I ingest?
 
 Web pages, papers, blog posts, PDFs, markdown files, text files, and pasted text. The skill converts everything into markdown under `raw/` and compiles it into `wiki/`.
 
+### What are the scenario templates?
+
+Four presets for `wiki/purpose.md` that tailor the wiki's direction: **general** (open exploration), **research** (paper tracking), **reading** (book synthesis), **project** (software docs). Choose during initialization or switch later.
+
+### How does deduplication work?
+
+Every raw file stores a SHA256 hash of its body content. Before ingesting, the skill checks if that hash already exists. If so, it skips the duplicate and tells you which file already has the content.
+
+### What is hot.md?
+
+A ~500-word session context cache that lets the agent pick up where you left off without re-reading your entire wiki. Updated at session end, read silently at session start.
+
 ### Is this production-ready?
 
-The workflow is based on a real knowledge base with 94 articles and 99 sources maintained daily since April 2026. The repo includes examples, templates, and a design spec.
+The workflow design is based on analysis of multiple production LLM wiki implementations. The repo includes examples, templates, and a full design spec.
 
 ## Inspired By
 
-Unofficial community implementation of the workflow from [Karpathy's LLM Wiki idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). The value here is the reusable workflow, prompt structure, and battle-tested knowledge-compilation rules.
-
-See also: [lucasastorian/llmwiki](https://github.com/lucasastorian/llmwiki), [atomicmemory/llm-wiki-compiler](https://github.com/atomicmemory/llm-wiki-compiler).
+Unofficial community implementation of the workflow from [Karpathy's LLM Wiki idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Design informed by analysis of [lucasastorian/llmwiki](https://github.com/lucasastorian/llmwiki), [SherwinQ/karpathy-wiki](https://github.com/SherwinQ/karpathy-wiki), and [ScrapingArt/Karpathy-LLM-Wiki-Stack](https://github.com/ScrapingArt/Karpathy-LLM-Wiki-Stack).
 
 ## License
 
